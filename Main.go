@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 	"log"
+	"os"
 	"time"
 )
 
@@ -61,6 +62,8 @@ func insertData(mongoConnectionStr, dbName, dataCollectionName, outboxCollection
 	return nil
 }
 
+const VERSION = "1.0.0"
+
 func main() {
 
 	urlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
@@ -71,6 +74,14 @@ func main() {
 	outboxCollectionParam := flagString.New("outbox-collection", "The name of collection to store the outbox message").BindCmd()
 	versionParam := flagUtils.Version().BindCmd()
 	flag.Parse()
+	if len(os.Args) == 1 {
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+	if versionParam.Value() {
+		fmt.Println("1.0.0")
+		os.Exit(0)
+	}
 
 	println("====")
 	println(urlParam.Value())
