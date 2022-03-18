@@ -1,0 +1,23 @@
+@startuml
+node "producer" as client#green
+queue "receiving-queue" as tq #yellow
+queue "receiving-queue-dl" as tqd #yellow
+queue "e-receiving-queue" as etq #orange
+queue "e-receiving-queue-dl" as etqd #orange
+etq --> tq : direct
+tq -> etqd: reject
+etqd -> tqd: direct
+tqd -> etq#red: ttl retry 10s
+client -> tq: send message
+node "consumer" as consumer#blue
+tq ---> consumer : fetch message
+
+legend right
+    |Color| Type |
+    |<#blue>| Exchange|
+    |<#orange>| Queue|
+    |<#green>| Producer|
+    |<#yellow>| Consumer|
+endlegend
+
+@enduml

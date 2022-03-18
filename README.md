@@ -2,6 +2,7 @@
 
 A simple program convert event from amqp message to mongo db
 
+
 ## Installation
 ```shell
 go install github.com/xh-dev-go/msg-to-mongo@latest
@@ -26,6 +27,8 @@ go get github.com/xh-dev-go/msg-to-mongo@latest
         The name of collection to store the outbox message
   -queue-name string
         The name of queue
+  -splitting
+        splitting message by new line
   -version
         show application version
 
@@ -42,6 +45,13 @@ msg-to-mongo \
   --mongo-url {mongo-url} \
   --mongo-db {db-name} \
   --data-collection {data-collection} \
-  --outbox-collection {outbox}
+  --outbox-collection {outbox} \
+  --splitting
 ```
 
+# Design
+## Sequence flow
+![sequence](./docs/sequence.svg)
+
+## Retry model
+![retry model](./docs/queue-retry-model.png)

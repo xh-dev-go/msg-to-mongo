@@ -1,0 +1,12 @@
+title msg-to-mongo
+begin broker , receiver, "Mongo" as mongo 
++receiver -> +broker: check for new message
+-broker --> receiver:  message
+receiver -> +mongo: save message (queue data + outbox)
+-receiver  <-- -mongo: 
+
+divider tear: 
++receiver -> +broker: send outbox notificaton by outbox id
+-broker -->> receiver: return response
+receiver -> +mongo: delete by outbox id
+-mongo -->> -receiver: 
