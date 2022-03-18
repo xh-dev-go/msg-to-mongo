@@ -51,7 +51,7 @@ msg-to-mongo \
 
 # Design
 ## Sequence flow
-![sequence](./docs/sequence.svg)
+![sequence](./docs/sequence.png)
 
 ## Retry model
 ![retry model](./docs/queue-retry-model.png)
