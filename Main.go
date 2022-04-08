@@ -161,10 +161,10 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.0-snapshot"
+const VERSION = "1.0.1"
 
 func main() {
-
+	fmt.Println("Version: " + VERSION)
 	urlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
 	queueNameParam := flagString.New("queue-name", "The name of queue").BindCmd()
 	mongUrlParam := flagString.New("mongo-url", "The connection string of mongodb").BindCmd()
@@ -228,20 +228,20 @@ func main() {
 
 	chNewMsg := make(chan string)
 	ticker := time.NewTicker(time.Minute)
-	sendOutboxMsg(client, "1234", mongUrlParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
+	//sendOutboxMsg(client, "1234", mongUrlParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 
 	go func() {
 		for {
 			select {
 			case outboxKey := <-chNewMsg:
-				fmt.Printf("delete outbox %v\n", outboxKey)
+				log.Printf("delete outbox %v\n", outboxKey)
 				err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 				if err != nil {
 					fmt.Println(err.Error())
 				}
 			case <-ticker.C:
 				for _, outboxKey := range findAllOutboxItems(client, mongoDBParam.Value(), "outbox") {
-					fmt.Println("Batch delete")
+					log.Println("Batch delete")
 					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 					if err != nil {
 						fmt.Printf("delete outbox %v\n", outboxKey)
@@ -255,7 +255,7 @@ func main() {
 
 	go func() {
 		for d := range msgs {
-			fmt.Println("Process message: " + d.MessageId)
+			log.Println("Process message: " + d.MessageId)
 			err = insertData(
 				client,
 				mongoDBParam.Value(),
@@ -266,24 +266,25 @@ func main() {
 				splittingParam.Value(),
 			)
 			if err != nil {
-				log.Fatal(err, "Fail to process message")
+				log.Println("Fail to process message")
+				log.Println(err.Error())
 				err := ch.Reject(d.DeliveryTag, false)
 				if err != nil {
-					fmt.Println(err.Error())
-					fmt.Println("Fail act")
+					log.Println("Fail ack")
+					log.Println(err.Error())
 					return
 				} else {
-					fmt.Println("success rollback")
+					log.Println("success rollback")
 				}
 			} else {
 				fmt.Println("[DONE]Process message: " + d.MessageId)
 				err := ch.Ack(d.DeliveryTag, false)
 				if err != nil {
-					fmt.Println("Fail reject")
-					fmt.Println(err.Error())
+					log.Println("Fail reject")
+					log.Println(err.Error())
 					return
 				} else {
-					fmt.Println("Success in ack")
+					log.Println("Success in ack")
 				}
 			}
 
