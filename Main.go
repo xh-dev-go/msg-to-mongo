@@ -62,6 +62,7 @@ func sendOutboxMsg(
 ) error {
 	amqpConn, amqpCh, err := getAMQPConn(amqpUrl)
 	if err != nil {
+		log.Printf("Fail to get amqp connection: %s\n", amqpUrl)
 		return err
 	}
 	defer amqpCh.Close()
@@ -80,6 +81,7 @@ func sendOutboxMsg(
 		Body:        []byte(outboxKey),
 	})
 	if err != nil {
+		log.Printf("Fail to publish to exchange: %s\n", exchange)
 		return err
 	}
 
@@ -156,9 +158,7 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.4"
-
-var resetChannel = true
+const VERSION = "1.0.5"
 
 func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(urlParam)
@@ -185,9 +185,10 @@ func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	fmt.Println("Version: " + VERSION)
-	urlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
-	queueNameParam := flagString.New("queue-name", "The name of queue").BindCmd()
+	amqpUrlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
+	amqpQueueNameParam := flagString.New("queue-name", "The name of queue").BindCmd()
 	mongoUrlParam := flagString.New("mongo-url", "The connection string of mongodb").BindCmd()
 	mongoDBParam := flagString.New("mongo-db", "The name of mongo db").BindCmd()
 	dataCollectionParam := flagString.New("data-collection", "The name of collection to store the message").BindCmd()
@@ -205,15 +206,15 @@ func main() {
 	}
 
 	println("====")
-	println(urlParam.Value())
-	println(queueNameParam.Value())
+	println(amqpUrlParam.Value())
+	println(amqpQueueNameParam.Value())
 	println(versionParam.Value())
 	println(mongoUrlParam.Value())
 	println(mongoDBParam.Value())
 	println(dataCollectionParam.Value())
 	println(outboxCollectionParam.Value())
 	println(splittingParam.Value())
-	exchangeName := fmt.Sprintf("e-%v-ob", queueNameParam.Value())
+	exchangeName := fmt.Sprintf("e-%v-ob", amqpQueueNameParam.Value())
 	println(exchangeName)
 
 	forever := make(chan bool)
@@ -236,7 +237,7 @@ func main() {
 					time.Sleep(time.Second)
 					continue
 				}
-				err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
+				err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpUrlParam.Value(), exchangeName, "")
 				if err != nil {
 					log.Printf("Fail delete outbox: %v\n", outboxKey)
 					log.Println(err.Error())
@@ -261,7 +262,7 @@ func main() {
 
 				}
 				for _, outboxKey := range keys {
-					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
+					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpUrlParam.Value(), exchangeName, "")
 					if err != nil {
 						log.Printf("delete outbox %v\n", outboxKey)
 						log.Println(err.Error())
@@ -278,7 +279,7 @@ func main() {
 		}()
 		for {
 			log.Println("Reset connection")
-			_, ch, err := getAMQPConn(urlParam.Value())
+			_, ch, err := getAMQPConn(amqpUrlParam.Value())
 			if err != nil {
 				log.Println("Fail to get amqp connection")
 				time.Sleep(time.Second)
@@ -291,13 +292,13 @@ func main() {
 				continue
 			}
 			msgs, err := ch.Consume(
-				queueNameParam.Value(), // queue
-				"",                     // consumer
-				false,                  // auto-ack
-				false,                  // exclusive
-				false,                  // no-local
-				false,                  // no-wait
-				nil,                    // args
+				amqpQueueNameParam.Value(), // queue
+				"",                         // consumer
+				false,                      // auto-ack
+				false,                      // exclusive
+				false,                      // no-local
+				false,                      // no-wait
+				nil,                        // args
 			)
 			for d := range msgs {
 				log.Println("Process message: " + d.MessageId)
