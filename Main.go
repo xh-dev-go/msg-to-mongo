@@ -266,6 +266,7 @@ func main() {
 		for {
 			log.Println("Reset connection")
 			_, ch := getAMQPConn(urlParam.Value())
+			client, err := getMongoClient(mongoUrlParam.Value())
 			msgs, err := ch.Consume(
 				queueNameParam.Value(), // queue
 				"",                     // consumer
