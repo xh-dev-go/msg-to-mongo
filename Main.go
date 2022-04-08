@@ -156,7 +156,7 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.2"
+const VERSION = "1.0.4"
 
 var resetChannel = true
 
