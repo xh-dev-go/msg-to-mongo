@@ -60,17 +60,9 @@ func sendOutboxMsg(
 	amqpUrl string,
 	exchange, key string,
 ) error {
-	conn, err := amqp.Dial(amqpUrl)
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		return err
-	}
-	defer ch.Close()
+	amqpConn, amqpCh := getAMQPConn(amqpUrl)
+	defer amqpCh.Close()
+	defer amqpConn.Close()
 	session, err := client.StartSession()
 	if err != nil {
 		panic(err)
@@ -80,7 +72,7 @@ func sendOutboxMsg(
 	db := client.Database(dbName)
 	outboxCollection := db.Collection(outboxCollectionName)
 
-	err = ch.Publish(exchange, key, false, false, amqp.Publishing{
+	err = amqpCh.Publish(exchange, key, false, false, amqp.Publishing{
 		ContentType: "text/plain",
 		Body:        []byte(outboxKey),
 	})
@@ -161,13 +153,39 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.1"
+const VERSION = "1.0.2"
+
+var resetChannel = true
+
+func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel) {
+	conn, err := amqp.Dial(urlParam)
+
+	if err != nil {
+		panic(err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		panic(err)
+	}
+
+	return conn, ch
+}
+
+func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrlParam))
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
 
 func main() {
 	fmt.Println("Version: " + VERSION)
 	urlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
 	queueNameParam := flagString.New("queue-name", "The name of queue").BindCmd()
-	mongUrlParam := flagString.New("mongo-url", "The connection string of mongodb").BindCmd()
+	mongoUrlParam := flagString.New("mongo-url", "The connection string of mongodb").BindCmd()
 	mongoDBParam := flagString.New("mongo-db", "The name of mongo db").BindCmd()
 	dataCollectionParam := flagString.New("data-collection", "The name of collection to store the message").BindCmd()
 	outboxCollectionParam := flagString.New("outbox-collection", "The name of collection to store the outbox message").BindCmd()
@@ -187,7 +205,7 @@ func main() {
 	println(urlParam.Value())
 	println(queueNameParam.Value())
 	println(versionParam.Value())
-	println(mongUrlParam.Value())
+	println(mongoUrlParam.Value())
 	println(mongoDBParam.Value())
 	println(dataCollectionParam.Value())
 	println(outboxCollectionParam.Value())
@@ -195,57 +213,45 @@ func main() {
 	exchangeName := fmt.Sprintf("e-%v-ob", queueNameParam.Value())
 	println(exchangeName)
 
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongUrlParam.Value()))
-	if err != nil {
-		panic(err)
-	}
-	defer client.Disconnect(ctx)
-
-	conn, err := amqp.Dial(urlParam.Value())
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		panic(err)
-	}
-	defer ch.Close()
-
 	forever := make(chan bool)
-
-	msgs, err := ch.Consume(
-		queueNameParam.Value(), // queue
-		"",                     // consumer
-		false,                  // auto-ack
-		false,                  // exclusive
-		false,                  // no-local
-		false,                  // no-wait
-		nil,                    // args
-	)
 
 	chNewMsg := make(chan string)
 	ticker := time.NewTicker(time.Minute)
-	//sendOutboxMsg(client, "1234", mongUrlParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 
 	go func() {
+		defer func() {
+			log.Println("Exit outbox processing")
+		}()
 		for {
 			select {
 			case outboxKey := <-chNewMsg:
 				log.Printf("delete outbox %v\n", outboxKey)
-				err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
+				client, err := getMongoClient(mongoUrlParam.Value())
 				if err != nil {
-					fmt.Println(err.Error())
+					log.Println("Error creating client")
+					log.Println(err.Error())
+					time.Sleep(time.Second)
+					continue
+				}
+				err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
+				if err != nil {
+					log.Println("Fail delete outbox: %v\n", outboxKey)
+					log.Println(err.Error())
 				}
 			case <-ticker.C:
+				log.Println("delete outbox batch")
+				client, err := getMongoClient(mongoUrlParam.Value())
+				if err != nil {
+					log.Println("Error creating client")
+					log.Println(err.Error())
+					time.Sleep(time.Second)
+					continue
+				}
 				for _, outboxKey := range findAllOutboxItems(client, mongoDBParam.Value(), "outbox") {
-					log.Println("Batch delete")
 					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 					if err != nil {
-						fmt.Printf("delete outbox %v\n", outboxKey)
-						fmt.Println(err.Error())
+						log.Printf("delete outbox %v\n", outboxKey)
+						log.Println(err.Error())
 					}
 				}
 
@@ -254,40 +260,55 @@ func main() {
 	}()
 
 	go func() {
-		for d := range msgs {
-			log.Println("Process message: " + d.MessageId)
-			err = insertData(
-				client,
-				mongoDBParam.Value(),
-				dataCollectionParam.Value(),
-				outboxCollectionParam.Value(),
-				string(d.Body),
-				chNewMsg,
-				splittingParam.Value(),
+		defer func() {
+			log.Println("Exit amqp process")
+		}()
+		for {
+			log.Println("Reset connection")
+			_, ch := getAMQPConn(urlParam.Value())
+			msgs, err := ch.Consume(
+				queueNameParam.Value(), // queue
+				"",                     // consumer
+				false,                  // auto-ack
+				false,                  // exclusive
+				false,                  // no-local
+				false,                  // no-wait
+				nil,                    // args
 			)
-			if err != nil {
-				log.Println("Fail to process message")
-				log.Println(err.Error())
-				err := ch.Reject(d.DeliveryTag, false)
+			for d := range msgs {
+				log.Println("Process message: " + d.MessageId)
+				err = insertData(
+					client,
+					mongoDBParam.Value(),
+					dataCollectionParam.Value(),
+					outboxCollectionParam.Value(),
+					string(d.Body),
+					chNewMsg,
+					splittingParam.Value(),
+				)
 				if err != nil {
-					log.Println("Fail ack")
+					log.Println("Fail to process message")
 					log.Println(err.Error())
-					return
+					err := ch.Reject(d.DeliveryTag, false)
+					if err != nil {
+						log.Println("Fail ack")
+						log.Println(err.Error())
+						break
+					} else {
+						log.Println("success rollback")
+					}
 				} else {
-					log.Println("success rollback")
-				}
-			} else {
-				fmt.Println("[DONE]Process message: " + d.MessageId)
-				err := ch.Ack(d.DeliveryTag, false)
-				if err != nil {
-					log.Println("Fail reject")
-					log.Println(err.Error())
-					return
-				} else {
-					log.Println("Success in ack")
+					fmt.Println("[DONE]Process message: " + d.MessageId)
+					err := ch.Ack(d.DeliveryTag, false)
+					if err != nil {
+						log.Println("Fail reject")
+						log.Println(err.Error())
+						break
+					} else {
+						log.Println("Success in ack")
+					}
 				}
 			}
-
 		}
 	}()
 
