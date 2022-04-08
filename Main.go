@@ -24,10 +24,10 @@ type Outbox struct {
 	Datetime string `bson:"datetime"`
 }
 
-func findAllOutboxItems(client *mongo.Client, dbName, collection string) []string {
+func findAllOutboxItems(client *mongo.Client, dbName, collection string) ([]string, error) {
 	session, err := client.StartSession()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer session.EndSession(context.Background())
 
@@ -51,7 +51,7 @@ func findAllOutboxItems(client *mongo.Client, dbName, collection string) []strin
 		}
 		return arr, nil
 	}, txnOpts)
-	return arr
+	return arr, nil
 }
 
 func sendOutboxMsg(
@@ -60,12 +60,15 @@ func sendOutboxMsg(
 	amqpUrl string,
 	exchange, key string,
 ) error {
-	amqpConn, amqpCh := getAMQPConn(amqpUrl)
+	amqpConn, amqpCh, err := getAMQPConn(amqpUrl)
+	if err != nil {
+		return err
+	}
 	defer amqpCh.Close()
 	defer amqpConn.Close()
 	session, err := client.StartSession()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer session.EndSession(context.Background())
 
@@ -108,7 +111,7 @@ func insertData(
 ) error {
 	session, err := client.StartSession()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer session.EndSession(context.Background())
 
@@ -157,19 +160,19 @@ const VERSION = "1.0.2"
 
 var resetChannel = true
 
-func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel) {
+func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(urlParam)
 
 	if err != nil {
-		panic(err)
+		return nil, nil, err
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
-		panic(err)
+		return nil, nil, err
 	}
 
-	return conn, ch
+	return conn, ch, nil
 }
 
 func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
@@ -247,7 +250,17 @@ func main() {
 					time.Sleep(time.Second)
 					continue
 				}
-				for _, outboxKey := range findAllOutboxItems(client, mongoDBParam.Value(), "outbox") {
+				keys, err := findAllOutboxItems(client, mongoDBParam.Value(), "outbox")
+				if err != nil {
+					if err != nil {
+						log.Println("Error get keys")
+						log.Println(err.Error())
+						time.Sleep(time.Second)
+						continue
+					}
+
+				}
+				for _, outboxKey := range keys {
 					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 					if err != nil {
 						log.Printf("delete outbox %v\n", outboxKey)
@@ -265,8 +278,18 @@ func main() {
 		}()
 		for {
 			log.Println("Reset connection")
-			_, ch := getAMQPConn(urlParam.Value())
+			_, ch, err := getAMQPConn(urlParam.Value())
+			if err != nil {
+				log.Println("Fail to get amqp connection")
+				time.Sleep(time.Second)
+				continue
+			}
 			client, err := getMongoClient(mongoUrlParam.Value())
+			if err != nil {
+				log.Println("Fail to get mongo connection")
+				time.Sleep(time.Second)
+				continue
+			}
 			msgs, err := ch.Consume(
 				queueNameParam.Value(), // queue
 				"",                     // consumer
