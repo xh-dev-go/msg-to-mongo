@@ -235,7 +235,7 @@ func main() {
 				}
 				err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), urlParam.Value(), exchangeName, "")
 				if err != nil {
-					log.Println("Fail delete outbox: %v\n", outboxKey)
+					log.Printf("Fail delete outbox: %v\n", outboxKey)
 					log.Println(err.Error())
 				}
 			case <-ticker.C:
