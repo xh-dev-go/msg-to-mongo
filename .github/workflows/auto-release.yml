@@ -18,12 +18,14 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: 1.17
-
       - name: Build
         run: go build -v ./...
-
       - name: Test
         run: go test -v ./...
+      - name: Get tag version
+        run: echo "TAG_VERSION=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_ENV
+      - name: Get tag message
+        run: echo "TAG_MESSAGE=$(git tag -n10 $TAG_VERSION)" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -31,10 +33,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
           tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          body: |
-            Changes in this Release
-            - First Change
-            - Second Change
+          release_name: ${{ github.ref }}
+          body: ${{ github.TAG_VERSION }}
           draft: false
           prerelease: false
