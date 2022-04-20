@@ -102,7 +102,7 @@ func sendOutboxMsg(
 
 func insertData(
 	client *mongo.Client, dbName, dataCollectionName, outboxCollectionName, data string,
-	newMsg chan string,
+//newMsg chan string,
 	splitting bool,
 ) error {
 	session, err := client.StartSession()
@@ -147,12 +147,12 @@ func insertData(
 	if err != nil {
 		return err
 	}
-	newMsg <- dateNow
+	//newMsg <- dateNow
 
 	return nil
 }
 
-const VERSION = "1.0.6"
+const VERSION = "1.0.7"
 
 func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(urlParam)
@@ -213,7 +213,7 @@ func main() {
 
 	forever := make(chan bool)
 
-	chNewMsg := make(chan string)
+	//chNewMsg := make(chan string)
 	ticker := time.NewTicker(time.Minute)
 
 	go func() {
@@ -239,21 +239,21 @@ func main() {
 
 			for {
 				select {
-				case outboxKey := <-chNewMsg:
-					log.Printf("delete outbox %v\n", outboxKey)
-					client, err := getMongoClient(mongoUrlParam.Value())
-					if err != nil {
-						log.Println("Error creating client")
-						log.Println(err.Error())
-						time.Sleep(time.Second)
-						continue
-					}
-					err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
-					if err != nil {
-						log.Printf("Fail delete outbox: %v\n", outboxKey)
-						log.Println(err.Error())
-						time.Sleep(time.Second)
-					}
+				//case outboxKey := <-chNewMsg:
+				//	log.Printf("delete outbox %v\n", outboxKey)
+				//	client, err := getMongoClient(mongoUrlParam.Value())
+				//	if err != nil {
+				//		log.Println("Error creating client")
+				//		log.Println(err.Error())
+				//		time.Sleep(time.Second)
+				//		continue
+				//	}
+				//	err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
+				//	if err != nil {
+				//		log.Printf("Fail delete outbox: %v\n", outboxKey)
+				//		log.Println(err.Error())
+				//		time.Sleep(time.Second)
+				//	}
 				case <-ticker.C:
 					log.Println("delete outbox batch")
 					client, err := getMongoClient(mongoUrlParam.Value())
@@ -331,7 +331,7 @@ func main() {
 					dataCollectionParam.Value(),
 					outboxCollectionParam.Value(),
 					string(d.Body),
-					chNewMsg,
+					//chNewMsg,
 					splittingParam.Value(),
 				)
 				if err != nil {
