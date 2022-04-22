@@ -152,7 +152,7 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.7"
+const VERSION = "1.0.8"
 
 func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(urlParam)
@@ -177,6 +177,8 @@ func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
 	}
 	return client, nil
 }
+
+var mqWrapper MQWrapper
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -211,6 +213,34 @@ func main() {
 	exchangeName := fmt.Sprintf("e-%v-ob", amqpQueueNameParam.Value())
 	println(exchangeName)
 
+	mqWrapper.setUrl(amqpUrlParam.Value())
+
+	refreshTick := make(chan time.Time)
+
+	go func() {
+		var first = true
+		var last = time.Now()
+		for {
+			select {
+			case t := <-refreshTick:
+				if first {
+					last = t
+					first = false
+				}
+
+				if last.After(t) || last.Equal(t) {
+					continue
+				}
+
+				if err := mqWrapper.ready(); err != nil {
+					log.Println(err.Error())
+					log.Println("Sleep for 1 second")
+					time.Sleep(time.Second)
+				}
+			}
+		}
+	}()
+
 	forever := make(chan bool)
 
 	//chNewMsg := make(chan string)
@@ -221,21 +251,14 @@ func main() {
 			log.Println("Exit outbox processing")
 		}()
 		for {
-			amqpUrl := amqpUrlParam.Value()
-			amqpConn, amqpCh, err := getAMQPConn(amqpUrl)
-			if err != nil {
-				log.Printf("Fail to get amqp connection: %s\n", amqpUrl)
-				time.Sleep(time.Second)
-				err = amqpCh.Close()
-				if err != nil {
-					time.Sleep(time.Second)
-				}
-				err = amqpConn.Close()
-				if err != nil {
-					time.Sleep(time.Second)
-				}
+			if err := mqWrapper.ready(); err != nil {
+				log.Println("connection not ready")
+				refreshTick <- time.Now()
+				log.Println("Sleep for 2 second")
+				time.Sleep(2 * time.Second)
 				continue
 			}
+			amqpCh, err := mqWrapper.getChannel()
 
 			for {
 				select {
@@ -285,11 +308,8 @@ func main() {
 
 				err = amqpCh.Close()
 				if err != nil {
-					time.Sleep(time.Second)
-				}
-				err = amqpConn.Close()
-				if err != nil {
-					time.Sleep(time.Second)
+					log.Println("Fail to close amqp channel, sleep for 2 second")
+					time.Sleep(2 * time.Second)
 				}
 			}
 
@@ -302,12 +322,16 @@ func main() {
 		}()
 		for {
 			log.Println("Reset connection")
-			amqpConn, ch, err := getAMQPConn(amqpUrlParam.Value())
-			if err != nil {
-				log.Println("Fail to get amqp connection")
-				time.Sleep(time.Second)
+
+			if err := mqWrapper.ready(); err != nil {
+				log.Println("connection not ready")
+				refreshTick <- time.Now()
+				log.Println("Sleep for 2 second")
+				time.Sleep(2 * time.Second)
 				continue
 			}
+
+			ch, err := mqWrapper.getChannel()
 			client, err := getMongoClient(mongoUrlParam.Value())
 			if err != nil {
 				log.Println("Fail to get mongo connection")
@@ -358,11 +382,8 @@ func main() {
 				}
 				err := ch.Close()
 				if err != nil {
-					log.Println("Fail close channel")
-				}
-				err = amqpConn.Close()
-				if err != nil {
-					log.Println("Fail close amqp connection")
+					log.Println("Fail close channel, sleep for 2 seconds")
+					time.Sleep(2 * time.Second)
 				}
 			}
 		}
