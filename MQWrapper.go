@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"github.com/streadway/amqp"
 	"log"
 )
@@ -14,7 +15,7 @@ func (wrapper *MQWrapper) setUrl(url string) {
 	wrapper.url = url
 }
 
-func (wrapper *MQWrapper) ready() error {
+func (wrapper *MQWrapper) getConn() error {
 	if wrapper.conn == nil {
 		log.Println("Create new connect")
 		conn, err := amqp.Dial(wrapper.url)
@@ -31,6 +32,15 @@ func (wrapper *MQWrapper) ready() error {
 			return err
 		}
 		wrapper.conn = conn
+	}
+	return nil
+}
+func (wrapper *MQWrapper) ready() error {
+	if wrapper.conn == nil {
+		log.Println("No connection set")
+		return errors.New("no connection set")
+	} else if wrapper.conn.IsClosed() {
+		return errors.New("connection is closed")
 	}
 	return nil
 }

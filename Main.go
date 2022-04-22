@@ -102,7 +102,7 @@ func sendOutboxMsg(
 
 func insertData(
 	client *mongo.Client, dbName, dataCollectionName, outboxCollectionName, data string,
-//newMsg chan string,
+	newMsg chan string,
 	splitting bool,
 ) error {
 	session, err := client.StartSession()
@@ -147,27 +147,12 @@ func insertData(
 	if err != nil {
 		return err
 	}
-	//newMsg <- dateNow
+	newMsg <- dateNow
 
 	return nil
 }
 
-const VERSION = "1.0.9"
-
-func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
-	conn, err := amqp.Dial(urlParam)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return conn, ch, nil
-}
+const VERSION = "1.0.10"
 
 func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
@@ -225,13 +210,12 @@ func main() {
 				if first {
 					last = t
 					first = false
-				}
-
-				if last.After(t) || last.Equal(t) {
+				} else if last.After(t) || last.Equal(t) {
+					log.Println("skip refresh amqp connection")
 					continue
 				}
 
-				if err := mqWrapper.ready(); err != nil {
+				if err := mqWrapper.getConn(); err != nil {
 					log.Println(err.Error())
 					log.Println("Sleep for 1 second")
 					time.Sleep(time.Second)
@@ -242,7 +226,7 @@ func main() {
 
 	forever := make(chan bool)
 
-	//chNewMsg := make(chan string)
+	chNewMsg := make(chan string)
 	ticker := time.NewTicker(time.Minute)
 
 	go func() {
@@ -259,57 +243,62 @@ func main() {
 			}
 			amqpCh, err := mqWrapper.getChannel()
 
-			for {
-				select {
-				//case outboxKey := <-chNewMsg:
-				//	log.Printf("delete outbox %v\n", outboxKey)
-				//	client, err := getMongoClient(mongoUrlParam.Value())
-				//	if err != nil {
-				//		log.Println("Error creating client")
-				//		log.Println(err.Error())
-				//		time.Sleep(time.Second)
-				//		continue
-				//	}
-				//	err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
-				//	if err != nil {
-				//		log.Printf("Fail delete outbox: %v\n", outboxKey)
-				//		log.Println(err.Error())
-				//		time.Sleep(time.Second)
-				//	}
-				case <-ticker.C:
-					log.Println("delete outbox batch")
-					client, err := getMongoClient(mongoUrlParam.Value())
+			select {
+			case outboxKey := <-chNewMsg:
+				log.Printf("delete outbox %v\n", outboxKey)
+				client, err := getMongoClient(mongoUrlParam.Value())
+				if err != nil {
+					log.Println("Error creating client")
+					log.Println(err.Error())
+					time.Sleep(time.Second)
+					continue
+				}
+				err = sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
+				if err != nil {
+					log.Printf("Fail delete outbox: %v\n", outboxKey)
+					log.Println(err.Error())
+					time.Sleep(time.Second)
+					break
+				}
+				log.Println("Complete delete outbox " + outboxKey)
+			case <-ticker.C:
+				log.Println("delete outbox batch")
+				client, err := getMongoClient(mongoUrlParam.Value())
+				if err != nil {
+					log.Println("Error creating client")
+					log.Println(err.Error())
+					time.Sleep(time.Second)
+					continue
+				}
+				keys, err := findAllOutboxItems(client, mongoDBParam.Value(), "outbox")
+				if err != nil {
 					if err != nil {
-						log.Println("Error creating client")
+						log.Println("Error get keys")
 						log.Println(err.Error())
 						time.Sleep(time.Second)
 						continue
 					}
-					keys, err := findAllOutboxItems(client, mongoDBParam.Value(), "outbox")
+
+				}
+				for _, outboxKey := range keys {
+					log.Println("Process key: " + outboxKey)
+					err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
 					if err != nil {
-						if err != nil {
-							log.Println("Error get keys")
-							log.Println(err.Error())
-							time.Sleep(time.Second)
-							continue
-						}
-
+						log.Printf("delete outbox %v\n", outboxKey)
+						log.Println(err.Error())
+						break
 					}
-					for _, outboxKey := range keys {
-						err := sendOutboxMsg(client, outboxKey, mongoDBParam.Value(), outboxCollectionParam.Value(), amqpCh, exchangeName, "")
-						if err != nil {
-							log.Printf("delete outbox %v\n", outboxKey)
-							log.Println(err.Error())
-						}
-					}
-
+					log.Println("[Done] Process key: " + outboxKey)
 				}
 
-				err = amqpCh.Close()
-				if err != nil {
-					log.Println("Fail to close amqp channel, sleep for 2 second")
-					time.Sleep(2 * time.Second)
-				}
+				log.Println("Complete batch delete")
+
+			}
+
+			err = amqpCh.Close()
+			if err != nil {
+				log.Println("Fail to close amqp channel, sleep for 2 second")
+				time.Sleep(2 * time.Second)
 			}
 
 		}
@@ -320,8 +309,6 @@ func main() {
 			log.Println("Exit amqp process")
 		}()
 		for {
-			log.Println("Reset connection")
-
 			if err := mqWrapper.ready(); err != nil {
 				log.Println("connection not ready")
 				refreshTick <- time.Now()
@@ -346,7 +333,13 @@ func main() {
 				false,                      // no-wait
 				nil,                        // args
 			)
-			for {
+			if err != nil {
+				log.Println("Fail to consume from queue, sleep for 2 seconds")
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			var loop = true
+			for loop {
 				select {
 				case d := <-msgs:
 					log.Println("Process message: " + d.MessageId)
@@ -356,7 +349,7 @@ func main() {
 						dataCollectionParam.Value(),
 						outboxCollectionParam.Value(),
 						string(d.Body),
-						//chNewMsg,
+						chNewMsg,
 						splittingParam.Value(),
 					)
 					if err != nil {
@@ -366,7 +359,7 @@ func main() {
 						if err != nil {
 							log.Println("Fail ack")
 							log.Println(err.Error())
-							break
+							loop = false
 						} else {
 							log.Println("success rollback")
 						}
@@ -376,18 +369,17 @@ func main() {
 						if err != nil {
 							log.Println("Fail reject")
 							log.Println(err.Error())
-							break
+							loop = false
 						} else {
 							log.Println("Success in ack")
 						}
 					}
-					err := ch.Close()
-					if err != nil {
-						log.Println("Fail close channel, sleep for 2 seconds")
-						time.Sleep(2 * time.Second)
-						break
-					}
 				}
+			}
+			err = ch.Close()
+			if err != nil {
+				log.Println("Fail close channel, sleep for 2 seconds")
+				time.Sleep(2 * time.Second)
 			}
 		}
 	}()
