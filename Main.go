@@ -152,7 +152,7 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.8"
+const VERSION = "1.0.9"
 
 func getAMQPConn(urlParam string) (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(urlParam)
@@ -182,7 +182,6 @@ var mqWrapper MQWrapper
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	fmt.Println("Version: " + VERSION)
 	amqpUrlParam := flagString.New("amqp-url", "The connection string of amqp").BindCmd()
 	amqpQueueNameParam := flagString.New("queue-name", "The name of queue").BindCmd()
 	mongoUrlParam := flagString.New("mongo-url", "The connection string of mongodb").BindCmd()
@@ -197,7 +196,7 @@ func main() {
 		os.Exit(0)
 	}
 	if versionParam.Value() {
-		fmt.Println("1.0.1")
+		fmt.Println(VERSION)
 		os.Exit(0)
 	}
 
@@ -347,43 +346,47 @@ func main() {
 				false,                      // no-wait
 				nil,                        // args
 			)
-			for d := range msgs {
-				log.Println("Process message: " + d.MessageId)
-				err = insertData(
-					client,
-					mongoDBParam.Value(),
-					dataCollectionParam.Value(),
-					outboxCollectionParam.Value(),
-					string(d.Body),
-					//chNewMsg,
-					splittingParam.Value(),
-				)
-				if err != nil {
-					log.Println("Fail to process message")
-					log.Println(err.Error())
-					err := ch.Reject(d.DeliveryTag, false)
+			for {
+				select {
+				case d := <-msgs:
+					log.Println("Process message: " + d.MessageId)
+					err = insertData(
+						client,
+						mongoDBParam.Value(),
+						dataCollectionParam.Value(),
+						outboxCollectionParam.Value(),
+						string(d.Body),
+						//chNewMsg,
+						splittingParam.Value(),
+					)
 					if err != nil {
-						log.Println("Fail ack")
+						log.Println("Fail to process message")
 						log.Println(err.Error())
-						break
+						err := ch.Reject(d.DeliveryTag, false)
+						if err != nil {
+							log.Println("Fail ack")
+							log.Println(err.Error())
+							break
+						} else {
+							log.Println("success rollback")
+						}
 					} else {
-						log.Println("success rollback")
+						fmt.Println("[DONE]Process message: " + d.MessageId)
+						err := ch.Ack(d.DeliveryTag, false)
+						if err != nil {
+							log.Println("Fail reject")
+							log.Println(err.Error())
+							break
+						} else {
+							log.Println("Success in ack")
+						}
 					}
-				} else {
-					fmt.Println("[DONE]Process message: " + d.MessageId)
-					err := ch.Ack(d.DeliveryTag, false)
+					err := ch.Close()
 					if err != nil {
-						log.Println("Fail reject")
-						log.Println(err.Error())
+						log.Println("Fail close channel, sleep for 2 seconds")
+						time.Sleep(2 * time.Second)
 						break
-					} else {
-						log.Println("Success in ack")
 					}
-				}
-				err := ch.Close()
-				if err != nil {
-					log.Println("Fail close channel, sleep for 2 seconds")
-					time.Sleep(2 * time.Second)
 				}
 			}
 		}
