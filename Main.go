@@ -152,18 +152,19 @@ func insertData(
 	return nil
 }
 
-const VERSION = "1.0.10"
+const VERSION = "1.0.11"
 
-func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrlParam))
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
-}
+//func getMongoClient(mongoUrlParam string) (*mongo.Client, error) {
+//	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+//	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrlParam))
+//	if err != nil {
+//		return nil, err
+//	}
+//	return client, nil
+//}
 
 var mqWrapper MQWrapper
+var mongoWrapper MongoWrapper
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -185,19 +186,21 @@ func main() {
 		os.Exit(0)
 	}
 
-	println("====")
-	println(amqpUrlParam.Value())
-	println(amqpQueueNameParam.Value())
-	println(versionParam.Value())
-	println(mongoUrlParam.Value())
-	println(mongoDBParam.Value())
-	println(dataCollectionParam.Value())
-	println(outboxCollectionParam.Value())
-	println(splittingParam.Value())
+	log.Println("====")
+	log.Println("Version: " + VERSION)
+	log.Println(amqpUrlParam.Value())
+	log.Println(amqpQueueNameParam.Value())
+	log.Println(versionParam.Value())
+	log.Println(mongoUrlParam.Value())
+	log.Println(mongoDBParam.Value())
+	log.Println(dataCollectionParam.Value())
+	log.Println(outboxCollectionParam.Value())
+	log.Println(splittingParam.Value())
 	exchangeName := fmt.Sprintf("e-%v-ob", amqpQueueNameParam.Value())
-	println(exchangeName)
+	log.Println(exchangeName)
 
 	mqWrapper.setUrl(amqpUrlParam.Value())
+	mongoWrapper.setUrl(mongoUrlParam.Value())
 
 	refreshTick := make(chan time.Time)
 
@@ -246,7 +249,8 @@ func main() {
 			select {
 			case outboxKey := <-chNewMsg:
 				log.Printf("delete outbox %v\n", outboxKey)
-				client, err := getMongoClient(mongoUrlParam.Value())
+				client, err := mongoWrapper.getConnection()
+				//client, err := getMongoClient(mongoUrlParam.Value())
 				if err != nil {
 					log.Println("Error creating client")
 					log.Println(err.Error())
@@ -263,7 +267,8 @@ func main() {
 				log.Println("Complete delete outbox " + outboxKey)
 			case <-ticker.C:
 				log.Println("delete outbox batch")
-				client, err := getMongoClient(mongoUrlParam.Value())
+				client, err := mongoWrapper.getConnection()
+				//client, err := getMongoClient(mongoUrlParam.Value())
 				if err != nil {
 					log.Println("Error creating client")
 					log.Println(err.Error())
@@ -318,7 +323,8 @@ func main() {
 			}
 
 			ch, err := mqWrapper.getChannel()
-			client, err := getMongoClient(mongoUrlParam.Value())
+			client, err := mongoWrapper.getConnection()
+			//client, err := getMongoClient(mongoUrlParam.Value())
 			if err != nil {
 				log.Println("Fail to get mongo connection")
 				time.Sleep(time.Second)
